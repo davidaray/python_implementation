@@ -1,0 +1,18 @@
+Assignment 1: Data visualization using python and pandas
+
+1. Use a data set of YOUR OWN. You may NOT use data from the web. If you don't have one, I'll give you one of mine.
+
+2. Use pandas, seaborn, numpy, matplotlib, etc (anything you need as long as it’s python-based) to generate plots of various color schemes using your data.
+
+3. Everyone will have a different plot type to generate and share.
+Nikki - Line plots
+Michaela - Pie graphs
+Austin - Box and whisker plot
+Jenna - Area plot
+Kevin - Scatter plot
+Carlos - Venn diagram
+
+4. Required output to present to everyone in two weeks:
+a. a fully formed, submittable script... python <name of script> -<options and input>
+b. must take input arguments using argparse, an input file with the data, and options such as legend colors, legend location, dpi, etc.
+c. output in .png format
