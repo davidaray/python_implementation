@@ -1,0 +1,54 @@
+Assignment 2: Modifying headers of an interleaved paired-read FASTQ file using python
+
+1. Use any GZIPPED interleaved FASTQ file in standard fastq format. I (Nikki) can provide a FASTQ file if necessary.
+
+Your file must start out in .fastq.gz format
+
+2. Make a python-based script to do the following:
+	Modify the the headers of each pair from standard:
+	
+		@D00602:32:H3LN7BCXX:1:1101:1205:2112 1:N:0:1
+		AAATATATATTATTCAATCACTTTGGATGAATCACCTGCTACTACTGACGGCACAAGTTTTATACTTCATTAAGGTCATAACAGAAGATTTTC
+		+
+		@@@FFFFDHDHFFIIIGGIJJJJJJJIEIJHIIIJJJJIHHIJIJJJIHIFHGIGIHFGHIEHGHJBHDHIJJHHEEEHFFFED@@CCEECDD
+		@D00602:32:H3LN7BCXX:1:1101:1182:2112 1:N:0:1
+		TTGCTGATGCAAGATACAATGAAAAGAAACAAGTGCATATG
+		+
+		-;CGGF:CHHD>BED?CCCCCCCACCB==CCAC>CCCD>C>
+		@D00602:32:H3LN7BCXX:1:1101:1231:2198 1:N:0:1
+		CTTCCAAATTAGGGCAGAGACCCAGAGATGATA
+		+
+		-.=?????????@@@??????=???<??>>???
+		@D00602:32:H3LN7BCXX:1:1101:1401:2198 1:N:0:1
+		CAGGCTGGTCTCCAACTCCTGGGCTCAAGCAGTCCTCCTGCCTCAGCCTTCCGAGTAGCTGAAACTGCAGGCATG
+		+
+		CC@FFFFFFHHHHGIJJJJIJJJGIJIJIIJIGIJJJJJJIJIJHIIIHIJJJBHCAHFHEGGHCHHFHFFFF?;
+
+	to custom headers, with:
+	a. A read ID that is always a set number of digits (example is 12 digits), 
+	b."OP:i:x", where x indicates if it is the forward or reverse read of a pair (forward = 1, reverse = 2)
+	
+		@000000000001	OP:i:1
+		AAATATATATTATTCAATCACTTTGGATGAATCACCTGCTACTACTGACGGCACAAGTTTTATACTTCATTAAGGTCATAACAGAAGATTTTC
+		+
+		@@@FFFFDHDHFFIIIGGIJJJJJJJIEIJHIIIJJJJIHHIJIJJJIHIFHGIGIHFGHIEHGHJBHDHIJJHHEEEHFFFED@@CCEECDD
+		@000000000001	OP:i:2
+		TTGCTGATGCAAGATACAATGAAAAGAAACAAGTGCATATG
+		+
+		-;CGGF:CHHD>BED?CCCCCCCACCB==CCAC>CCCD>C>
+		@000000000002	OP:i:1
+		CTTCCAAATTAGGGCAGAGACCCAGAGATGATA
+		+
+		-.=?????????@@@??????=???<??>>???
+		@000000000002	OP:i:2
+		CAGGCTGGTCTCCAACTCCTGGGCTCAAGCAGTCCTCCTGCCTCAGCCTTCCGAGTAGCTGAAACTGCAGGCATG
+		+
+		CC@FFFFFFHHHHGIJJJJIJJJGIJIJIIJIGIJJJJJJIJIJHIIIHIJJJBHCAHFHEGGHCHHFHFFFF?;
+
+For quick info what is standard in an Illumina FASTQ:
+http://support.illumina.com/content/dam/illumina-support/help/BaseSpaceHelp_v2/Content/Vault/Informatics/Sequencing_Analysis/BS/swSEQ_mBS_FASTQFiles.htm
+
+3. Required output to present in two weeks:
+a. a fully formed, submittable script... python <name of script> -<input, output, options>
+b. must take input and output arguments, as well as an argument for the number of digits in the read ID
+c. output in .fastq format
