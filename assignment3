@@ -1,0 +1,17 @@
+###############################################################
+#####                Python Assignment #3                 #####
+##### Creating sliding windows and Calculating GC content #####
+###############################################################
+
+
+##### Steps to take #####
+# 1. Only use scaffolds with a minimum length (Ex: 30,000 bp)
+# 2. Create sliding windows of given length (Ex: 10,000 bp) using "def" function
+# 3. Calculate GC content for each window using "def" function
+# 4. Plot frequency histogram 
+
+##### Arguments #####
+# 1. Input file
+# 2. Output plot file
+# 3. Minimum length of scaffold
+# 4. Length of window
