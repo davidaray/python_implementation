@@ -8,6 +8,15 @@ from Bio.Seq import Seq
 from Bio import SeqIO
 from Bio.Alphabet import generic_dna
 import sys
+import pandas as pd
+import numpy as np
+import pybedtools
+import pyfaidx
+from pyfaidx import Fasta
+import logging
+pd.options.mode.chained_assignment = None  # default='warn'
+
+LOGGER = logging.getLogger(__name__)
 
 ## Set up input arguments
 def get_args():
@@ -19,6 +28,8 @@ def get_args():
 	parser.add_argument('-n', '--hitnumber', type=str, help='The number of hits to be exracted. Optional. Default = 50.', default = 50)
 	parser.add_argument('-a', '--align', type=str, help='Align the output fasta file, y or n?. Default is y.', default = 'y')
 	parser.add_argument('-e', '--emboss', type=int, help='Generate a trimal/emboss consensus, y or n. Optional.', default = 'y')
+	parser.add_argument("-l", "--log_level", default="INFO")
+
 
 	args = parser.parse_args()
 	GENOME = args.genome
@@ -28,14 +39,15 @@ def get_args():
 	HITNUM = args.hitnumber
 	ALIGN = args.align
 	EMBOSS = args.emboss
+	LOG = args.log_level
 
-	return GENOME, BLAST, LIB, BUFFER, HITNUM, ALIGN, EMBOSS
-	
-## Reverse complement function for selected blast hits
-def REVCOMP(INPUT):
-	for record in SeqIO.parse(INPUT, 'fasta'):
-		REVSEQ = record.reverse_complement(id='rc_' + record.id, description = 'add coordinates when actually working')
-		return REVSEQ
+	return GENOME, BLAST, LIB, BUFFER, HITNUM, ALIGN, EMBOSS, LOG
+
+## No longer needed --- Reverse complement function for selected blast hits
+#def REVCOMP(INPUT):
+#	for record in SeqIO.parse(INPUT, 'fasta'):
+#		REVSEQ = record.reverse_complement(id='rc_' + record.id, description = 'add coordinates when actually working')
+#		return REVSEQ
 
 ## Create TE outfiles function. Creates files for populating with blast hits.
 def CREATE_TE_OUTFILES(LIBRARY):
@@ -44,14 +56,51 @@ def CREATE_TE_OUTFILES(LIBRARY):
 		NEWID = re.sub('/', '___', NEWID)
 		record.id = 'CONSENSUS-' + NEWID
 		record.description = ''
-		SeqIO.write(record, NEWID + '.fa', 'fasta')
+		SeqIO.write(record, 'tefiles/' + NEWID + '.fa', 'fasta')
 				
 ## Organize blast hits function. Will read in blast file, sort based on e-value and bitscore, ajd deterine top BUFFER hits for extraction.
 def ORGANIZE_BLAST(BLAST, BUFFER, HITNUMBER):
+##Read in blast data
+	BLASTDF = pd.read_table(BLAST, sep='\t', names=['QUERYNAME', 'SCAFFOLD', 'C', 'D', 'E', 'F', 'QUERYSTART', 'QUERYSTOP', 'SCAFSTART', 'SCAFSTOP', 'E-VALUE', 'BITSCORE'])
+##Convert to bed format
+	BLASTBED = BLASTDF[['SCAFFOLD', 'SCAFSTART', 'SCAFSTOP', 'QUERYNAME', 'E-VALUE', 'BITSCORE']]
+	BLASTBED.insert(6, 'STRAND', '+')
+	BLASTBED.loc[BLASTBED.SCAFSTOP < BLASTDF.SCAFSTART, 'STRAND'] = '-'
+	BLASTBED.SCAFSTART, BLASTBED.SCAFSTOP = np.where(BLASTBED.SCAFSTART > BLASTBED.SCAFSTOP, [BLASTBED.SCAFSTOP, BLASTBED.SCAFSTART], [BLASTBED.SCAFSTART, BLASTBED.SCAFSTOP])
+##Generate list of query names
+	QUERYLIST = BLASTBED.QUERYNAME.unique()
+##Sort subsets of df based on query names, keep the top BUFFER hits, and save bedfiles
+	for QUERY in QUERYLIST:
+		QUERYFRAME = BLASTBED[BLASTBED['QUERYNAME'] == QUERY]
+		QUERYFRAME = QUERYFRAME.sort_values(by=['E-VALUE', 'BITSCORE'], ascending=[True, False])
+		QUERYFRAME = QUERYFRAME.head(HITNUM)
+		#QUERYFRAME.SCAFSTART = QUERYFRAME.SCAFSTART - BUFFER
+		#QUERYFRAME.SCAFSTOP = QUERYFRAME.SCAFSTOP + BUFFER
+		#If value in SCAFSTART is < 0, set to 0
+		#QUERYFRAME.SCAFSTART = np.where(QUERYFRAME.SCAFSTART < 0, 0, QUERYFRAME.SCAFSTART)
+		QUERYFRAME.to_csv('bedfiles/' + QUERY + '.bed', sep='\t', header=True, index=True)
+		pybedtools.BedTool.sequence(fi=fasta
 	
+
 
 ####MAIN function
 def main():
+## Set up logging and script timing
+#    logging.basicConfig(format='')
+#    logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+#    start_time = time.time()
+
+#    LOGGER.info("#\n# extract_align.py\n#")
+	
+## Set up directories	
+	os.mkdir('tefiles')
+	os.mkdir('bedfiles')
+	os.mkdir('muscle')
+	os.mkdir('consensusfiles')
+	
+## Index the genome 
+	GENOMEIDX = Fasta('GENOME')
+	
 ##Get input arguments
 	GENOME, BLAST, LIB, BUFFER, HITNUM, ALIGN, EMBOSS = get_args()
 	print('Input genome = ' + GENOME)
@@ -74,8 +123,16 @@ def main():
 
 ##Create TE out files to populate with blast hits
 	CREATE_TE_OUTFILES(LIB)
+	
+	end_time = time.time()
+    LOGGER.info("Run time: " + str(datetime.timedelta(seconds=end_time-start_time)))
 
 
+#
+# Wrap script functionality in main() to avoid automatic execution
+# when imported ( e.g. when help is called on file )
+#
 if __name__ =="__main__":main()
 		
+
 
