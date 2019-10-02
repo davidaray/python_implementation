@@ -14,6 +14,226 @@ import datetime
 pd.options.mode.chained_assignment = None  # default='warn'
 
 LOGGER = logging.getLogger(__name__)
+
+
+
+# Where RepeatMasker is stored
+REPEATMASKER = "/lustre/work/daray/software/RepeatMasker"
+# Where this script can find liftUp, twoBitInfo and twoBitToFa
+BIN_DIR = "/lustre/work/daray/software"
+
+# Define arguments
+def get_args():
+	#What this script does
+	parser = argparse.ArgumentParser(description="Generate SGE cluster runs for RepeatMasker; built in RepeatMasker parameters are -xsmall [softmasks repetitive regions] -a [.align output file] -gff [generates a GFF format output] -pa [runs in parallel], please see RepeatMasker for details of these run options", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+	required = parser.add_argument_group('required arguments')
+	#Give input genome FASTA
+	parser.add_argument('-i', '--input', type=str, help='genome file in FASTA format', required=True)
+	#Argument of species name
+	parser.add_argument('-sp', '--species', type=str, help='Source species of query DNA FASTA', required=False)
+	# Desired batch number
+	parser.add_argument('-b', '--batch_count', type=int, help='Batch count', default=50)
+	# Input genome directory
+	parser.add_argument('-dir', '--genome_dir', type=str, help='Path to genome FASTA', required=True)
+	# Argument for output directory
+	parser.add_argument('-od', '--outdir', type=str, help='Location of directory for the output subdirectory', default='.')
+	# Which queue to use
+	parser.add_argument('-q', '--queue', type=str, help='Select the queue to run RepeatMasker in [quanah|hrothgar] with the quanah option being the general quanah omni queue, and hrothgar being the communitycluster Chewie queue', choices=['quanah', 'hrothgar'], default='quanah')
+	#Argument of RepeatMasker run parameter
+	parser.add_argument('-lib', type=str, help='RepeatMasker run parameter custom library "-lib [filename]" option', required=False)
+	#Argument of RepeatMasker run parameter
+	parser.add_argument('-xsmall', type=str, help='Select a RepeatMasker masking option as lowercase bases [-xsmall], default is to mask as Ns', action='store_true')
+	#Argument of RepeatMasker run parameter
+	parser.add_argument('-engine', type=str, help='RepeatMasker run parameter "-engine <search_engine>" option; select a non-default search engine to use, otherwise RepeatMasker will used the default configured at install time; [crossmatch|abblast|rmblast|hmmer]', choices=['crossmatch', 'abblast', 'rmblast', 'hmmer'], required=False)
+	#Argument of RepeatMasker run parameter
+	parser.add_argument('-inv', type=str, help='RepeatMasker parameter flag "-inv" option; alignments are presented in the orientation of the repeat', action='store_true')
+	#Argument of RepeatMasker run parameter
+	parser.add_argument('-nolow', type=str, help='RepeatMasker parameter flag "-nolow" option; does not mask low complexity DNA or simple repeats', action='store_true')
+	#Argument of RepeatMasker run parameter
+	parser.add_argument('-s', '-speed', type=str, help='RepeatMasker run parameter "-q" or "-s" option; q=quick search; 5-10% less sensitive, 3-4 times faster than default; s=slow search; 0-5% more sensitive, 2.5 times slower than default', choices=['q', 's'], required=False)
+	#Argument of RepeatMasker run parameter
+	parser.add_argument('-div', type=int, help='RepeatMasker run parameter "-div [number]" option; masks only those repeats that are less than [number] percent diverged from the consensus sequence', required=False)
+	
+	args = parser.parse_args()
+	GENOME = args.input
+	SPECIES = args.species
+	BATCH_COUNT = args.batch_count
+	GENOME_DIR = args.genome_dir
+	OUTDIR = args.outdir
+	QUEUE = args.queue
+	LIBRARY = args.lib
+	XSMALL = args.xsmall
+	ENGINE = args.engine
+	INV = args.inv
+	NOLOW = args.nolow
+	SPEED = args.speed
+	DIV = args.div
+	
+	return GENOME, SPECIES, BATCH_COUNT, GENOME_DIR, OUTDIR, QUEUE, LIBRARY, XSMALL, ENGINE, INV, NOLOW, SPEED, DIV
+	
+GENOME, SPECIES, BATCH_COUNT, GENOME_DIR, OUTDIR, QUEUE, LIBRARY, XSMALL, ENGINE, INV, NOLOW, SPEED, DIV = get_args()
+
+# Sanity checks
+print("The species is {}, the query genome is {}.\n").format(SPECIES, GENOME)
+print("{} batches will be made.\n").format(str(BATCH_COUNT))
+print("The genome FASTA is located in '{}'.\n").format(GENOME_DIR)
+print("The output directory is '{}'.\n").format(OUTDIR)
+print("The job queue is {}.\n").format(QUEUE)
+
+if not SPECIES or LIBRARY:
+	sys.exit("Must supply value for option 'species' or 'lib'!")
+if SPECIES and LIBRARY:
+	sys.exit("Only supply a value for one option: 'species' or 'lib'! Not both!")
+
+FLAGS = [LIBRARY, XSMALL, ENGINE, INV, NOLOW, SPEED, DIV]
+if not FLAGS:
+	print("All default RepeatMasker parameters were used, no custom library.")
+else:
+	print("Custom parameters used:\n")
+	if XSMALL:
+		print("-xsmall flag used.\n")
+	if INV:
+		print("-inv flag used.\n")
+	if NOLOW:
+		print("-nolow flag used.\n")
+	if LIBRARY:
+		print("-lib flag used. Custom library is '{}'.\n").format(os.path.basename(LIBRARY))
+	if ENGINE:
+		print("-engine flag used. Changed search engine to {}.\n").format(ENGINE)
+	if SPEED:
+		print("-{} flag used. Search sensitivity has changed.\n").format(SPEED)
+	if DIV:
+		print("-div flag used. RepeatMasker will mask only repeats that are less than {}% diverged from the consensus sequence.\n").format(str(DIV))
+
+
+if not os.path.isdir(GENOME_DIR):
+	sys.exit("The given genome directory, '{}', does not exist.").format(GENOME_DIR)
+
+GENOME_FASTA = os.path.join(GENOME_DIR, GENOME)
+
+#if not os.path.isfile(GENOME_FASTA):
+#	sys.exit("The given genome file '{}' does not exist.").format(GENOME_FASTA)
+#if os.stat(GENOME).st_size==0:
+#	sys.exit("The genome file, '{}', is empty.").format(GENOME_FASTA)
+#if not os.path.isfile(LIBRARY):
+#	sys.exit("The given library file '{}' does not exist.").format(LIBRARY)
+#if os.stat(LIBRARY).st_size==0:
+#	sys.exit("The library file, '{}', is empty.").format(LIBRARY)
+
+try:
+	if not os.path.getsize(GENOME_FASTA) > 0:
+		sys.exit("The genome file, '{}', is empty.").format(GENOME_FASTA)
+except OSError as e:
+	sys.exit("The genome file '{}' does not exist or is inaccessible.").format(GENOME_FASTA)
+	
+try:
+	if not os.path.getsize(LIBRARY) > 0:
+		sys.exit("The library file, '{}', is empty.").format(LIBRARY)
+except OSError as e:
+	sys.exit("The library file '{}' does not exist or is inaccessible.").format(LIBRARY)
+	
+if not os.path.isdir(OUTDIR):
+	sys.exit("The output directory '{}' does not exist.").format(OUTDIR)
+
+PARTITION_DIR = os.path.join(GENOME_DIR, "RMPart")
+
+SLOTS_PER_BATCH = 10
+MAX_DIR_SIZE = 1000
+NUM_BATCHES = BATCH_COUNT
+
+PARTITION_DIR = os.path.abspath(PARTITION_DIR)
+if not os.listdir(PARTITION_DIR):
+	print("{} is empty. Continuing.").format(PARTITION_DIR)
+else:
+	print("{} is not empty. Removing contents and continuing.").format(PARTITION_DIR)
+	os.remove(os.path.join(PARTITION_DIR, '*'))
+
+def get_batches():
+	# Return a 3-level list(ref): partitions -> chunks -> chunk properties (scaffold + coordinates)
+	PARTS = []
+	
+	## Index the genome 
+	LOGGER.info('Indexing the genome')
+	GENOMEIDX = Fasta(GENOME)
+	GENOMEPREFIX = os.path.splitext(GENOME)[0]
+	FAIDX = pd.read_csv(GENOME	+ '.fai', sep='\t', names=['CONTIGHEADER', 'CONTIGSIZE', 'three', 'four', 'five'])
+	FAIDX = FAIDX[['CONTIGHEADER', 'CONTIGSIZE']]
+	FAIDX.to_csv(GENOMEPREFIX + '.fai', sep='\t', header=False, index=False)
+	
+	##Calculate total size of all contigs
+	TOTALSIZE = FAIDX['CONTIGSIZE'].sum()
+	## Get all of the headers into a list
+	HEADERLIST = FAIDX['CONTIGHEADER'].tolist()
+	## Remove index column and use all the contig names as the index
+	NEWFAIDX = FAIDX.set_index('CONTIGHEADER')
+	NEWFAIDX = NEWFAIDX.rename_axis(None)
+		
+	##Definitions --> BATCH = 000, 001, etc.
+	##Definitions --> CHUNK = the peice of a contig to be added to a 000.fa, 001.fa, etc.
+	## If batch_count is invoked...
+	if BATCH_COUNT > 0:
+		##Calculate the size of each chunk to be used in each batch
+		TARGET_TOTAL_CHUNK_SIZE_PER_BATCH = int(TOTALSIZE / NUM_BATCHES) + 1
+		## For each batch...
+		for CURRENT_BATCH in range(0, NUM_BATCHES):
+			## Set THIS_TOTAL_CHUNK_SIZE chunk size to zero
+			THIS_TOTAL_CHUNK_SIZE = 0
+			CURRENT_BATCH_HEADERLIST = []
+			## Start putting together your list of headers, indicating how much of each contig you will use.
+			## So, while THIS_TOTAL_CHUNK_SIZE (sum of all CHUNKS being added) is less than TARGET_TOTAL_CHUNK_SIZE_PER_BATCH
+			CURRENT_CONTIG_SIZE = FAIDX.at[CONTIG_NAME, 'CONTIGSIZE']
+			if CURRENT_CONTIG_SIZE + THIS_TOTAL_CHUNK_SIZE < TARGET_TOTAL_CHUNK_SIZE_PER_BATCH:
+				CURRENT_HEADER_TO_ADD = HEADERLIST[0] + ':1 - ' + CURRENT_CONTIG_SIZE
+				CURRENT_BATCH_HEADERLIST.append(CURRENT_HEADER_TO_ADD)
+			
+			while THIS_TOTAL_CHUNK_SIZE < TARGET_TOTAL_CHUNK_SIZE_PER_BATCH:
+				AVAILABLE_SPACE = TARGET_TOTAL_CHUNK_SIZE_PER_BATCH - THIS_TOTAL_CHUNK_SIZE
+				## Get the contig name for the first contig
+				CONTIG_NAME = HEADERLIST[0]
+				## Get the size of that contig 
+				CONTIG_SIZE = FAIDX.at[CONTIG_NAME, 'CONTIGSIZE']
+				## Check if this contig is larger than what remains available in THIS_TOTAL_CHUNK_SIZE
+				## Add CONTIG_SIZE to THIS_TOTAL_CHUNK_SIZE
+				THIS_TOTAL_CHUNK_SIZE += CONTIGSIZE
+				##Remove the contig under consideration from HEADERLIST 
+				del HEADERLIST[0]
+				
+
+
+
+	COMMAND = BIN + "/twoBitInfo " + GENOME_FASTA + " stdout |"
+	#open(P, $COMMAND)
+		#|| die "Couldn't open pipe ($COMMAND): $_\n"
+	TOTAL_SIZE = 0
+	SEQS = ()
+	#while (<P>) {
+	#	chomp;
+	#	my ($seq, $seqsize) = split("\t");
+	# ....
+	
+	if NUM_BATCHES > 0:
+		CHUNK_SIZE = int(TOTAL_SIZE / NUM_BATCHES) + 1
+		
+	BATCHES = ()
+	CURRENT_BATCH_SIZE = 0
+	for SEQ in SEQS:
+		SEQ_SIZE = SEQ_SIZES{SEQ}
+		SEQ_IDX = 0
+		while SEQ_SIZE > 0:
+		
+		
+##MAIN
+def main():	
+##Get input arguments
+	GENOMEFA, BATCH, SPECIES. LIBRARY, XSMALL, NOLOW, INV, GENOMEPATH, QSUB, FAST, QUEUE, LOG = get_args()
+
+
+#
+# Wrap script functionality in main() to avoid automatic execution
+# when imported ( e.g. when help is called on file )
+#
+if __name__ =="__main__":main()
+		
 '''The text below is from the Hubley, perl version of this script. It provides general information but some aspecs have changed as we converted to python.
 
    Given a .2bit file and either the batch count or batch size, create a 
@@ -228,50 +448,6 @@ mechanism and rolled in lots of script generation for the job run.
 '''
 
 
-## Set up input arguments
-def get_args():
-	parser = argparse.ArgumentParser(description="Given a fasta file and a batch count, create a directory structure with subdirectories for each batch and a set of scripts for use with TTU's Univa Grid Engine Cluster.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-	parser.add_argument('-g', '--genome_fasta', type=str, help='Name of the fasta formatted genome to be queried.', required=True)
-	parser.add_argument('-b', '--batch_count', type=int, help="Integer number of batches into which to split the genome and run RepeatMasker.", required = True)
-	parser.add_argument('-s', '--species', type=str, help='If using a Repbase derived library. Must use this if a custom library is not used.')
-	parser.add_argument('-l', '--library', type=str, help='Custom repeat library in fasta format with #Class/Family designations. Must use this if a species library is not used.')
-	parser.add_argument('-x', '--xsmall', type=str, help='Mask to lowercase letters. If not invoked, the default is to mask to Ns. Default = n', default='n')
-	parser.add_argument('-n', '--nlow', type=str, help='Mask low-complexity regions? Default = no.', default = 'n')
-	parser.add_argument('-i', '--inv', type=str, help='Return alignments in the orientation of the repeats. Default is y.', default = 'y')
-	parser.add_argument('-p', '--path_to_genome', type=str, help='Path to the genome fasta? Default is the current working directory.', default = '.')
-	parser.add_argument('-R', '--RMPart', type=str, help='If rerunning, delete the RMPart directory? Default = yes.', default = 'y')
-	parser.add_argument('-q', '--qsub', type=str, help='Automatically submit all of the batch jobs? Default = yes.', default = 'y')
-	parser.add_argument('-f', '--fast', type=str, help='Run in rapid mode? Default = no, run in sensitive mode.', default = 'n')
-	parser.add_argument(-'qu', '--queue', type=str, help="Run on 'quanah' or 'hrothgar'? Default = quanah.", default = 'quanah')
-	parser.add_argument("-log", "--log_level", default="INFO")
+		
 
-	args = parser.parse_args()
-	GENOMEFA = args.genome_fasta
-	BATCH = args.batch_count
-	SPECIES = args.species
-	LIBRARY = args.library
-	XSMALL = args.xsmall
-	NOLOW = args.nolow
-	INV = args.inv
-	GENOMEPATH = args.path_to_genome
-	QSUB = args.qsub
-	FAST = args.fast
-	QUEUE = args.queue
-	LOG = args.log_level
-
-	return GENOMEFA, BATCH, SPECIES. LIBRARY, XSMALL, NOLOW, INV, GENOMEPATH, QSUB, FAST, QUEUE, LOG
-
-##FUNCTIONS
-
-##MAIN
-def main():	
-##Get input arguments
-	GENOMEFA, BATCH, SPECIES. LIBRARY, XSMALL, NOLOW, INV, GENOMEPATH, QSUB, FAST, QUEUE, LOG = get_args()
-
-
-#
-# Wrap script functionality in main() to avoid automatic execution
-# when imported ( e.g. when help is called on file )
-#
-if __name__ =="__main__":main()
 		
