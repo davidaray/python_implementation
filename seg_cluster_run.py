@@ -1,21 +1,21 @@
-import argparse
-import shutil
-import re
+import sys
 import os
+import argparse
+import itertools
 import subprocess
-from Bio import SeqIO
-import pandas as pd
-import numpy as np
-from pybedtools import BedTool
+from pyfaidx import Faidx
 from pyfaidx import Fasta
-import logging
 import time
-import datetime
-pd.options.mode.chained_assignment = None  # default='warn'
-
-LOGGER = logging.getLogger(__name__)
-
-
+import re
+import stat
+import shutil
+from shutil import copyfile
+import errno
+from Bio import SeqIO
+from Bio import SeqRecord
+from Bio import Seq
+#import numpy as np
+#import pandas as pd
 
 # Where RepeatMasker is stored
 REPEATMASKER = "/lustre/work/daray/software/RepeatMasker"
@@ -44,15 +44,18 @@ def get_args():
 	#Argument of RepeatMasker run parameter
 	parser.add_argument('-xsmall', type=str, help='Select a RepeatMasker masking option as lowercase bases [-xsmall], default is to mask as Ns', action='store_true')
 	#Argument of RepeatMasker run parameter
-	parser.add_argument('-engine', type=str, help='RepeatMasker run parameter "-engine <search_engine>" option; select a non-default search engine to use, otherwise RepeatMasker will used the default configured at install time; [crossmatch|abblast|rmblast|hmmer]', choices=['crossmatch', 'abblast', 'rmblast', 'hmmer'], required=False)
+	#parser.add_argument('-engine', type=str, help='RepeatMasker run parameter "-engine <search_engine>" option; select a non-default search engine to use, otherwise RepeatMasker will used the default configured at install time; [crossmatch|abblast|rmblast|hmmer]', choices=['crossmatch', 'abblast', 'rmblast', 'hmmer'], required=False)
 	#Argument of RepeatMasker run parameter
-	parser.add_argument('-inv', type=str, help='RepeatMasker parameter flag "-inv" option; alignments are presented in the orientation of the repeat', action='store_true')
+	#parser.add_argument('-inv', type=str, help='RepeatMasker parameter flag "-inv" option; alignments are presented in the orientation of the repeat', action='store_true')
 	#Argument of RepeatMasker run parameter
 	parser.add_argument('-nolow', type=str, help='RepeatMasker parameter flag "-nolow" option; does not mask low complexity DNA or simple repeats', action='store_true')
 	#Argument of RepeatMasker run parameter
-	parser.add_argument('-s', '-speed', type=str, help='RepeatMasker run parameter "-q" or "-s" option; q=quick search; 5-10% less sensitive, 3-4 times faster than default; s=slow search; 0-5% more sensitive, 2.5 times slower than default', choices=['q', 's'], required=False)
+	parser.add_argument('-s', '--sensitivity', type=str, help='RepeatMasker run parameter "-q" or "-s" option; q=quick search; 5-10% less sensitive, 3-4 times faster than default; s=slow search; 0-5% more sensitive, 2.5 times slower than default', choices=['q', 's'], required=False, default='s')
 	#Argument of RepeatMasker run parameter
-	parser.add_argument('-div', type=int, help='RepeatMasker run parameter "-div [number]" option; masks only those repeats that are less than [number] percent diverged from the consensus sequence', required=False)
+	#parser.add_argument('-div', type=int, help='RepeatMasker run parameter "-div [number]" option; masks only those repeats that are less than [number] percent diverged from the consensus sequence', required=False)
+	#*****Add prefix to keep track of this job in the queue
+	parser.add_argument('-p', '--prefix', type=str, help='Provide a short prefix to help you keep track of this job in the queue.', required=True)
+	parser.add_argument('-proc', '--processors', type=int, help='How many processors to use for each RepeatMasker run. Default is 10.' required=False, default=10)
 	
 	args = parser.parse_args()
 	GENOME = args.input
@@ -63,51 +66,56 @@ def get_args():
 	QUEUE = args.queue
 	LIBRARY = args.lib
 	XSMALL = args.xsmall
-	ENGINE = args.engine
-	INV = args.inv
+	#ENGINE = args.engine
+	#INV = args.inv
 	NOLOW = args.nolow
-	SPEED = args.speed
-	DIV = args.div
+	SPEED = args.sensitivity
+	#DIV = args.div
+	PREFIX = args.prefix
+	PROC = args.processors
 	
-	return GENOME, SPECIES, BATCH_COUNT, GENOME_DIR, OUTDIR, QUEUE, LIBRARY, XSMALL, ENGINE, INV, NOLOW, SPEED, DIV
+	return GENOME, SPECIES, BATCH_COUNT, GENOME_DIR, OUTDIR, QUEUE, LIBRARY, XSMALL, NOLOW, SPEED, PREFIX, PROC
 	
-GENOME, SPECIES, BATCH_COUNT, GENOME_DIR, OUTDIR, QUEUE, LIBRARY, XSMALL, ENGINE, INV, NOLOW, SPEED, DIV = get_args()
+GENOME, SPECIES, BATCH_COUNT, GENOME_DIR, OUTDIR, QUEUE, LIBRARY, XSMALL, NOLOW, SPEED, PREFIX, PROC = get_args()
 
 # Sanity checks
-print("The species is {}, the query genome is {}.\n").format(SPECIES, GENOME)
-print("{} batches will be made.\n").format(str(BATCH_COUNT))
-print("The genome FASTA is located in '{}'.\n").format(GENOME_DIR)
-print("The output directory is '{}'.\n").format(OUTDIR)
-print("The job queue is {}.\n").format(QUEUE)
+print("The query genome is {}.\n".format(GENOME))
+print("{} batches will be made.\n".format(str(BATCH_COUNT)))
+print("The genome FASTA is located in '{}'.\n".format(GENOME_DIR))
+print("The output directory is '{}'.\n".format(OUTDIR))
+print("The job queue is {}.\n".format(QUEUE))
+print("The prefix for tracking the job is {}\n".format(PREFIX)
+print("{} processors will be requested for every RepeatMasker batch. \n".format(PROC)
 
 if not SPECIES or LIBRARY:
 	sys.exit("Must supply value for option 'species' or 'lib'!")
 if SPECIES and LIBRARY:
 	sys.exit("Only supply a value for one option: 'species' or 'lib'! Not both!")
 
-FLAGS = [LIBRARY, XSMALL, ENGINE, INV, NOLOW, SPEED, DIV]
+FLAGS = [LIBRARY, XSMALL, NOLOW, SPEED]
 if not FLAGS:
 	print("All default RepeatMasker parameters were used, no custom library.")
 else:
 	print("Custom parameters used:\n")
 	if XSMALL:
 		print("-xsmall flag used.\n")
-	if INV:
-		print("-inv flag used.\n")
+	#if INV:
+	#	print("-inv flag used.\n")
 	if NOLOW:
 		print("-nolow flag used.\n")
 	if LIBRARY:
-		print("-lib flag used. Custom library is '{}'.\n").format(os.path.basename(LIBRARY))
-	if ENGINE:
-		print("-engine flag used. Changed search engine to {}.\n").format(ENGINE)
+		print("-lib flag used. Custom library is '{}'.\n".format(os.path.basename(LIBRARY)))
+	#if ENGINE:
+	#	print("-engine flag used. Changed search engine to {}.\n".format(ENGINE))
 	if SPEED:
-		print("-{} flag used. Search sensitivity has changed.\n").format(SPEED)
-	if DIV:
-		print("-div flag used. RepeatMasker will mask only repeats that are less than {}% diverged from the consensus sequence.\n").format(str(DIV))
-
+		print("-{} flag used. Search sensitivity has changed.\n".format(SPEED))
+	#if DIV:
+	#	print("-div flag used. RepeatMasker will mask only repeats that are less than {}% diverged from the consensus sequence.\n".format(str(DIV)))
+	if PROC:
+		print("-proc flag used. Each RepeatMasker run will use {} processors.\n".format(str(PROC)))
 
 if not os.path.isdir(GENOME_DIR):
-	sys.exit("The given genome directory, '{}', does not exist.").format(GENOME_DIR)
+	sys.exit("The given genome directory, '{}', does not exist.".format(GENOME_DIR))
 
 GENOME_FASTA = os.path.join(GENOME_DIR, GENOME)
 
@@ -122,332 +130,282 @@ GENOME_FASTA = os.path.join(GENOME_DIR, GENOME)
 
 try:
 	if not os.path.getsize(GENOME_FASTA) > 0:
-		sys.exit("The genome file, '{}', is empty.").format(GENOME_FASTA)
+		sys.exit("The genome file, '{}', is empty.".format(GENOME_FASTA))
 except OSError as e:
-	sys.exit("The genome file '{}' does not exist or is inaccessible.").format(GENOME_FASTA)
+	sys.exit("The genome file '{}' does not exist or is inaccessible.".format(GENOME_FASTA))
 	
 try:
 	if not os.path.getsize(LIBRARY) > 0:
-		sys.exit("The library file, '{}', is empty.").format(LIBRARY)
+		sys.exit("The library file, '{}', is empty.".format(LIBRARY))
 except OSError as e:
-	sys.exit("The library file '{}' does not exist or is inaccessible.").format(LIBRARY)
+	sys.exit("The library file '{}' does not exist or is inaccessible.".format(LIBRARY))
 	
 if not os.path.isdir(OUTDIR):
-	sys.exit("The output directory '{}' does not exist.").format(OUTDIR)
+	sys.exit("The output directory '{}' does not exist.".format(OUTDIR))
 
 PARTITION_DIR = os.path.join(GENOME_DIR, "RMPart")
 
 SLOTS_PER_BATCH = 10
-MAX_DIR_SIZE = 1000
 NUM_BATCHES = BATCH_COUNT
 
-PARTITION_DIR = os.path.abspath(PARTITION_DIR)
-if not os.listdir(PARTITION_DIR):
-	print("{} is empty. Continuing.").format(PARTITION_DIR)
-else:
-	print("{} is not empty. Removing contents and continuing.").format(PARTITION_DIR)
-	os.remove(os.path.join(PARTITION_DIR, '*'))
+check_empty(PARTITION_DIR)
+# &checkEmpty($partitionDir);
 
-def get_batches():
+if LIBRARY:
+	copyfile(LIBRARY, PARTITION_DIR)
+	LIB_FILE = os.path.basename(LIBRARY)
+	LIBRARY = os.path.join(PARTITION_DIR, LIB_FILE)
+# my $lib;
+# if ( exists $options{'lib'} )
+# {
+  # system("cp $options{'lib'} $partitionDir");
+  # my ( $vol, $dir, $file ) = File::Spec->splitpath( $options{'lib'} );
+  # $lib="$partitionDir/$file";
+# }
+
+#simple_partition()
+#build_DoLift()
+# &simplePartition();
+# &buildDoLift();
+
+# exit;
+
+
+############## FUNCTIONS #################
+
+# Subroutine (1)
+def check_empty(PARTITION_DIR):
+	PARTITION_DIR = os.path.abspath(PARTITION_DIR)
+	if not os.path.exists(PARTITION_DIR):
+		try:
+			os.makedirs(PARTITION_DIR)
+		except OSError as e:
+			if e.errno != errno.EEXIST:
+				raise
+		print("Made '{}' directory.".format(PARTITION_DIR))
+	else:
+		if not os.listdir(PARTITION_DIR):
+			print("'{}' is empty. Continuing.".format(PARTITION_DIR))
+		else:
+			print("'{}' is not empty. Removing contents and continuing.".format(PARTITION_DIR))
+		#	os.remove(os.path.join(PARTITION_DIR, '*'))
+		## To remove anything in the RMPart folder from a previous run (all symbolic links (not expected here) and files and subdirectories) without deleting the RMPart directory itself
+			for FILE in os.listdir(PARTITION_DIR):
+				FILE_PATH = os.path.join(PARTITION_DIR, FILE)
+				try:
+					shutil.rmtree(FILE_PATH)
+				except OSError:
+					os.remove(FILE_PATH)
+
+# Subroutine (2)
+def get_batches(NUM_BATCHES, GENOME_FASTA):
 	# Return a 3-level list(ref): partitions -> chunks -> chunk properties (scaffold + coordinates)
 	PARTS = []
-	
-	## Index the genome 
-	LOGGER.info('Indexing the genome')
-	GENOMEIDX = Fasta(GENOME)
-	GENOMEPREFIX = os.path.splitext(GENOME)[0]
-	FAIDX = pd.read_csv(GENOME	+ '.fai', sep='\t', names=['CONTIGHEADER', 'CONTIGSIZE', 'three', 'four', 'five'])
-	FAIDX = FAIDX[['CONTIGHEADER', 'CONTIGSIZE']]
-	FAIDX.to_csv(GENOMEPREFIX + '.fai', sep='\t', header=False, index=False)
-	
-	##Calculate total size of all contigs
-	TOTALSIZE = FAIDX['CONTIGSIZE'].sum()
-	## Get all of the headers into a list
-	HEADERLIST = FAIDX['CONTIGHEADER'].tolist()
-	## Remove index column and use all the contig names as the index
-	NEWFAIDX = FAIDX.set_index('CONTIGHEADER')
-	NEWFAIDX = NEWFAIDX.rename_axis(None)
-		
-	##Definitions --> BATCH = 000, 001, etc.
-	##Definitions --> CHUNK = the peice of a contig to be added to a 000.fa, 001.fa, etc.
-	## If batch_count is invoked...
-	if BATCH_COUNT > 0:
-		##Calculate the size of each chunk to be used in each batch
-		TARGET_TOTAL_CHUNK_SIZE_PER_BATCH = int(TOTALSIZE / NUM_BATCHES) + 1
-		## For each batch...
-		for CURRENT_BATCH in range(0, NUM_BATCHES):
-			## Set THIS_TOTAL_CHUNK_SIZE chunk size to zero
-			THIS_TOTAL_CHUNK_SIZE = 0
-			CURRENT_BATCH_HEADERLIST = []
-			## Start putting together your list of headers, indicating how much of each contig you will use.
-			## So, while THIS_TOTAL_CHUNK_SIZE (sum of all CHUNKS being added) is less than TARGET_TOTAL_CHUNK_SIZE_PER_BATCH
-			CURRENT_CONTIG_SIZE = FAIDX.at[CONTIG_NAME, 'CONTIGSIZE']
-			if CURRENT_CONTIG_SIZE + THIS_TOTAL_CHUNK_SIZE < TARGET_TOTAL_CHUNK_SIZE_PER_BATCH:
-				CURRENT_HEADER_TO_ADD = HEADERLIST[0] + ':1 - ' + CURRENT_CONTIG_SIZE
-				CURRENT_BATCH_HEADERLIST.append(CURRENT_HEADER_TO_ADD)
-			
-			while THIS_TOTAL_CHUNK_SIZE < TARGET_TOTAL_CHUNK_SIZE_PER_BATCH:
-				AVAILABLE_SPACE = TARGET_TOTAL_CHUNK_SIZE_PER_BATCH - THIS_TOTAL_CHUNK_SIZE
-				## Get the contig name for the first contig
-				CONTIG_NAME = HEADERLIST[0]
-				## Get the size of that contig 
-				CONTIG_SIZE = FAIDX.at[CONTIG_NAME, 'CONTIGSIZE']
-				## Check if this contig is larger than what remains available in THIS_TOTAL_CHUNK_SIZE
-				## Add CONTIG_SIZE to THIS_TOTAL_CHUNK_SIZE
-				THIS_TOTAL_CHUNK_SIZE += CONTIGSIZE
-				##Remove the contig under consideration from HEADERLIST 
-				del HEADERLIST[0]
-				
-
-
-
-	COMMAND = BIN + "/twoBitInfo " + GENOME_FASTA + " stdout |"
-	#open(P, $COMMAND)
-		#|| die "Couldn't open pipe ($COMMAND): $_\n"
+	GENOME_NAME = os.path.basename(GENOME_FASTA).split(".")[0]
 	TOTAL_SIZE = 0
-	SEQS = ()
-	#while (<P>) {
-	#	chomp;
-	#	my ($seq, $seqsize) = split("\t");
-	# ....
+	SEQS = {}
+	
+	FAIDX = Faidx(GENOME_FASTA)
+	FASTA_IDX = GENOME_FASTA + ".fai"
+	
+	with open(FASTA_IDX) as FILE:
+		for LINE in FILE:
+			LINE = LINE.rstrip()
+			SEQ, SEQ_SIZE, JUNK = LINE.split("\t", 2)
+			TOTAL_SIZE += int(SEQ_SIZE)
+			SEQS[SEQ] = int(SEQ_SIZE)
 	
 	if NUM_BATCHES > 0:
 		CHUNK_SIZE = int(TOTAL_SIZE / NUM_BATCHES) + 1
-		
-	BATCHES = ()
+	
+	BATCHES = []
 	CURRENT_BATCH_SIZE = 0
-	for SEQ in SEQS:
-		SEQ_SIZE = SEQ_SIZES{SEQ}
+	for SCAFFOLD in SEQS:
+		SEQ_SIZE = SEQS[SCAFFOLD]
 		SEQ_IDX = 0
+		
 		while SEQ_SIZE > 0:
-		
-		
-##MAIN
-def main():	
-##Get input arguments
-	GENOMEFA, BATCH, SPECIES. LIBRARY, XSMALL, NOLOW, INV, GENOMEPATH, QSUB, FAST, QUEUE, LOG = get_args()
+			if (CURRENT_BATCH_SIZE + SEQ_SIZE) > CHUNK_SIZE:
+				FILL_SIZE = CHUNK_SIZE - CURRENT_BATCH_SIZE
+				CHUNK_INFO = str(GENOME_NAME + ":" + SCAFFOLD + ":" + str(SEQ_IDX) + "-" + str(SEQ_SIZE))
+				#NOTE: For scaffold size, always refer back to the index dict, not SEQ_SIZE,
+				# since SEQ_SIZE changes depending on if the whole scaffold was used in
+				# a single batch or not (as in the if statement of this loop)
+				PARTS.append([SCAFFOLD, SEQS[SCAFFOLD], SEQ_IDX, FILL_SIZE, CHUNK_INFO])
+				BATCHES.append([PARTS])
+				PARTS = []
+				SEQ_IDX += FILL_SIZE
+				SEQ_SIZE -= FILL_SIZE
+				CURRENT_BATCH_SIZE = 0
+			else:
+				CHUNK_INFO = str(GENOME_NAME + ":" + SCAFFOLD + ":" + str(SEQ_IDX) + "-" + str(SEQ_SIZE))
+				PARTS.append([SCAFFOLD, SEQS[SCAFFOLD], SEQ_IDX, SEQ_SIZE, CHUNK_INFO])
+				CURRENT_BATCH_SIZE += SEQ_SIZE
+				SEQ_SIZE = 0
+	#unclear if BATCHES will be in the appropriate hierarchy of lists/parts(elements) atm
+	# This bit must be outside of the for loop, otherwise each iteration thru the loop 
+	# will append the current PARTS list to BATCHES x# of scaffolds in the PARTS list
+	if PARTS:
+		BATCHES.append([PARTS])
+	
+	return BATCHES
+# Subroutine (3)
+def part_path_from_num(PART_NUM, LEVELS):
+	MAX_DIR_SIZE = 1000
+	# Given a partition ID number and number of levels in directory tree,
+	# determine its path and base filename.
+	LEAF_ID = PART_NUM % MAX_DIR_SIZE
+	PART_MOD = int(PART_NUM / MAX_DIR_SIZE)
+	#Use this line if actually include that dumb loop below
+	#PATH = str('{:03d}'.format(LEAF_ID))
+	PATH = str('{:03d}/'.format(LEAF_ID))
+	## So the below loop should never come into play (as far as I can tell),
+	## because LEVELS should always = 1, so w/ i=1 i is never less than LEVELS 
+	## (unless # BATCHES exceeds MAX_DIR_SIZE)
+	## w/n an RMPart dir, PATH folders are always 000 to n, no addnl nums on either side
+	#for i in range(1, LEVELS):
+	#i = 1
+	#while i < LEVELS:
+		#PATH = PATH + str('{:03d}/'.format(PART_MOD % MAX_DIR_SIZE))
+		#PART_MOD = int(PART_MOD / MAX_DIR_SIZE)
+		#i+= 1
+	#my partName = $path;
+	PART_NAME = PATH
+	#$partName =~ s@/@@g ## is telling it to replace "/" with nothing, globally (90% sure)
+	#	var	match operator of must contain	s is strict or s is the start of s///g???
+	PART_NAME = PART_NAME.replace('/', '')
+	
+	return(PATH, PART_NAME)
+
+# Subroutine (4)
+#partially tested, incomplete
+def simple_partition():
+	print("Generating list of batches...\n")
+	PARTS = get_batches(BATCH_COUNT, GENOME_FASTA)
+	NUM_PARTS = len(PARTS)
+	# Basically LEVELS always equals 1 until NUM_PARTS >= MAX_DIR_SIZE
+	MAX_DIR_SIZE = 1000
+	LEVELS = 1 + int(log(NUM_PARTS) / log(MAX_DIR_SIZE))
+	
+	TRAILING_SIZE = 0
+	MIN_SEQ_CNT = -1
+	MAX_SEQ_CNT = 0
+	for BATCH in PARTS:
+		SEQ_SIZE = 0
+		for SEQS in BATCH:
+			SEQ_CNT = 0
+			for SEQ in SEQS:
+				SEQ_CNT += 1
+				SEQ_SIZE += SEQ[3]
+			#print(SEQ_CNT)
+			if (MIN_SEQ_CNT < 0) or (MIN_SEQ_CNT > SEQ_CNT):
+				MIN_SEQ_CNT = SEQ_CNT
+			if (MAX_SEQ_CNT < SEQ_CNT):
+				MAX_SEQ_CNT = SEQ_CNT
+		if SEQ_SIZE != CHUNK_SIZE:
+			TRAILING_SIZE = SEQ_SIZE
+		#print(SEQ_SIZE)
+	print("Batch Stats:\n")
+	print("  - {} batches with between {} and {} sequences.".format(str(len(PARTS)), str(MIN_SEQ_CNT), str(MAX_SEQ_CNT)))
+	if TRAILING_SIZE:
+		print("  - {} batches with {} bp and one trailing batch with {} bp.".format(str(len(PARTS) - 1), str(CHUNK_SIZE), str(TRAILING_SIZE)))
+	else:
+		print("  - All batches contain exactly {} bp.".format(str(CHUNK_SIZE)))
+	
+##############################################################################
+############  EVERYTHING ABOVE THIS LINE IS FROM NIKKI'S SCRIPT    ##########
+############  IT IS NOT PROPERLY CONNECTED TO THE SCRIPT BELOW      ##########
+##############################################################################
+
+### TO MERGE NIKKI AND MY SCRIPTS TOGETHER I CHANGED LINES 321 & 324
+### LINE 321: USED THE "BATCH_COUNT" ARGUMENT FROM ARGPARSE
+### LINE 324: USED THE "GENOME" ARGUMENT FROM ARGPARSE INSTEAD OF HARD CODING IN THE FILE
 
 
-#
-# Wrap script functionality in main() to avoid automatic execution
-# when imported ( e.g. when help is called on file )
-#
-if __name__ =="__main__":main()
-		
-'''The text below is from the Hubley, perl version of this script. It provides general information but some aspecs have changed as we converted to python.
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
 
-   Given a .2bit file and either the batch count or batch size, create a 
-   directory structure with subdirectories for each batch and a set of 
-   scripts for use with David's Sun Grid Engine Cluster.  For details 
-   on how this script works and how best to use David's cluster with
-   RepeatMasker, see the "background" section below.
+# Set chunk number
+batch_number = BATCH_COUNT
 
-   An example run looks like this:
+# Create a list of all the seq records inside of the genome
+records = list(SeqIO.parse(GENOME, "fasta"))
 
-      % cd /lustre/work/daray/GENOMES/Hubley.genomes
-      % mkdir mm10; cd mm10
-      % ... scp mm10.unmasked.2bit from UCSC to mm10/
-      % generateSGEClusterRun.pl -twoBit mm10.unmasked.2bit \
-           -batch_count 24 \
-           -species "Mus musculus" \
-           -genomeDir /lustre/work/daray/GENOMES/Hubley.genomes/mm10
-      % /bin/csh < qsub.sh
-          # Submits 24 jobs to the queue
-      % tail RMPart/*/run.log
-          # view the end of the log file for each batch in the queue
-          # The last few lines should look like this for a completed
-          # batch:
-          #   cycle 10 .......................................
-          #   Generating output......................
-          #   masking
-          #   done
-          # 
-      % cat RMPart/*/run.log | egrep -v "identifying|Checking|refining|cycle|Generating|processing|masking|Search Engine:|Master RepeatMasker|RepeatMasker version"| egrep -v "^$" | more
-          # When all batches are complete, check for errors.  This should 
-          # display a header plus two lines per batch:
-          #     analyzing file 000.fa
-          #     done
-          # If any messages appear in between these two lines take note 
-          # and concat the RepeatMasker folks.
-      % qsub doLift.sh
-         
-          # cluster to combine the results, and run some high-level
-          # analsysis scripts on the results. When complete all final
-          # files are gziped.  The RMPart directory may be deleted
-          # once the results have been verifed.
-
-   BACKGROUND
-   ==========
-
-   Sun Grid Engine (SGE) RepeatMasker Batch Template
-   
-   RepeatMasker is a shared memory multi-threaded ( forking ) 
-   perl program.  Each invocation of RepeatMasker must run on a
-   single node but can optionally use more than one processor on
-   that node using the RepeatMasker "-pa #" parameter.  
-  
-   Site Specifics:
-      Job Submission Node: hrothgar.hpcc.ttu.edu
-      Cluster Configuration:
-          Nodes:
-              ray512cc@compute-17-1.local    40 slots ( large memory )
-              raycc@compute-17-2.local       40 slots
-              raycc@compute-17-3.local       40 slots
-              raycc@compute-17-4.local       40 slots
-              raycc@compute-17-5.local       20 slots
-              raycc@compute-17-6.local       20 slots
-              raycc@compute-17-7.local       20 slots
-              raycc@compute-17-8.local       20 slots
-                                            ---------
-                                   Total    240 slots
-  
-         Queues:
-          Two queues one for the large memory node and another for
-          all other nodes
-  
-         Parallel Execution Environments
-          On hrothgar SGE has two general parallel execution ( -pe )
-          settings: fill and sm. 
-   
-          fill:  Allocate slots on the cluster on various nodes
-                 in a round-robin fashion until the total number
-                 requested is reached.  This option cannot be
-                 used with shared-memory tasks like RepeatMasker
-                 as slots are not gauranteed to be on the same
-                 node.  
-  
-          sm:    Allocate all slots requested on a single node.
-                 This is the general "shared memory" environment.
-  
-  
-  
-        RepeatMasker Run Recommendation:
-           There is a tradeoff made when deciding how fine grained
-           to make the job size of a particular RepeatMasker run.
-           You could place the entire genome in one batch and use
-           one invocation of RepeatMasker running with all the slots
-           on one node. (ie. queue ray512cc, -pe sm 40, and 
-           RepeatMasker -pa 40 ).  This would ensure that no one
-           else got onto this machine while we were running and cause
-           it to be overloaded.  It would also mean that we couldn't
-           benefit from free slots on other nodes to complete this run
-           even faster.  Also it means that if there are only 39
-           slots available on ray512cc we will have to wait until all
-           40 are available before we can begin running.  Lastly
-           as a single computer running a genome could take quite
-           some time, we have essentially hogged this node and made
-           sure that no one else will be able to use this node for 
-           perhaps many days.
-  
-           We could go to the other extreme and divide the genome into
-           many small batches and allocate just a single slot per job.
-           ( ie. queue raycc,ray512cc, -pe sm 1, and RepeatMasker -pa 1 ).
-           This would mean that we have short running jobs allowing for
-           others in the queue to jump up in priority and get some 
-           slots.  Also this allows for us to use the entire cluster
-           rather than just one node.  The downside is that results
-           need to be combined after a run is complete to build a complete
-           dataset, boundary ( edge cases ) can occur where repeats may
-           be missed at boundaries of batches, and finally the overhead 
-           many RepeatMasker invocations starts to reduce the benefit 
-           of the parallelization. 
-  
-           A middle of the road approach is a good choice in these
-           situations.  Here I decided to use a jobs size of 10 slots
-           (-pe sm 10 ) per RepeatMasker invocation ( using 
-           RepeatMasker -pa 9 ).  Why -pa 9 when I told SGE to use
-           to slots ( 10 cpus in your case )?  This is because 
-           RepeatMasker itself uses one slot and the other 9 
-           are used by RepeatMasker to invoke 9 parallel runs of
-           cross_match ( or whichever search engine you are using ).
-           This reduces the ovearhead of too many RepeatMasker scripts
-           running.  This also gives me between 2 and 4 batches 
-           running per machine.  It also gives someone a chance
-           to hold jobs and let another user jump ahead in a reasonable
-           amount of runtime.
-      
-           I further decided to minimize the batch size to about
-           the size that would fill the cluster ( should it be free ).
-           240 slots / 10 = 24.
-
-     A typical run works like this:
-             - Break the genome up into 24 non-overlapping batches.
-             - Submit 24 batches to the queue with the following
-                 parameters:
-                     o Use either ray512cc or raycc queue to
-                       run ( -q raycc,ray512cc )
-                     o Use a shared memory environment and request
-                       10 slots per batch ( -pe sm 10 )
-                     o Each batch runs RepeatMasker using -pa 9
-               - When jobs are finished and no errors are 
-                 found in the log files, the individual batch
-                 runs are lifted up ( coordinates transformed back
-                 from batch coordinates to global genomic coordinates )
-                 and combined into a single result set.  Also I 
-                 typically run some optional higher level analsysis
-                 scripts on the results ( such as summarizing the 
-                 *.out file, building repeat landscapes etc ).
-
-      Batch Mechanism:
-
-           The design of the batch file organisation is from
-           UCSC with modifications.  
-               - Gather information about the assembly ( size, 
-                 sequences ) from the *.2bit file using the
-                 UCSC utility "twoBitInfo".
-               - Create subdirectories for each batch using 3
-                 digit numbers ( zero padded ) starting from 
-                 "000" and containing several files:
-                            
-	                  000.fa  : Sequence for the batch 
-                                    pre-extracted from the .2bit
-                                    file.
-                          000.lft : A UCSC lift file which describes
-                                    the genomic coordinates of the
-                                    sequences in the batch file.
-                          000.seqlst : A file which contains just the
-                                       names of the sequences in the
-                                       batch.
-                          batch-000.sh : The SGE script to run
-                                         RM on the batch
+# Define the chunk size
+# Sum of all lengths of all records diveded by "batch_number"
+chunk_size = sum(len(i) for i in records) // batch_number + 1
 
 
-               - Once runs are complete in all the batch directories,
-                 the results need to be adjusted so they can be combined.
-                      * In each batch directory run the UCSC
-                        liftUp program, specifying the file type ( *.out
-                        or *.align ) and the *.lft file and the unlifted
-                        RM output file.  
-                      * One final run of liftUp is run to combine all the
-                        lifted results from the previous step.
-                - Finally the RepeatMasker buildSummary program is run
-                  on the *.out file to create a summary of the results
-                  ( similar to the *.tbl file ).
-                        
-                 
-The options are:
+# Start creating batches
+def create_batch(records, chunk_size):
+    
+	# Create an object out of each record and go through them iteratively
+    record_it = iter(records)
 
-=over 4
+    # The "next" object in the list of "records"... 
+    # Basically going through each contig one at a time
+    record = next(record_it)
+    
+    # Initiallize base pair counting
+    current_base = 0
 
-=item -version
+    # Create a dictionary for batches and initialize the batch size
+    # "Batch" is defined as the output fasta file that has a collection of "chunks"
+    batch = []
+    batch_size = 0
 
-Displays the version of the program
+    # While there are still records left in the list, keep creating new batches
+    while record:
 
-=back
+        # Loop over records untill the batch is full (i.e. reached the max chunk size), or there are no new records 
+        while batch_size != chunk_size and record:
 
-=head1 DEPENDENCIES
+        	# Define the end... which sums up to the chunk size
+            end = current_base + chunk_size - batch_size
 
-RepeatMasker, UCSC: liftUp, twoBitInfo, twoBitToFa
+            # Define the output sequence, which is the current base (beginning base), seperated by a ":" and the end base of the contig
+            seq = record[current_base:end]
 
-=head1 SEE ALSO
+            # Define where to cut the contig off, which is the current base + the length of the output sequence defined above
+            end_of_slice = current_base + len(seq) - 1
 
-Based initially on the simplePartition.pl UCSC script for breaking up
-jobs for their cluster.  This version has a much improved batching 
-mechanism and rolled in lots of script generation for the job run.
- 
-'''
+            # Create the fasta headers to match that of the original SGE script
+            # <original_contig_name> ":" <beginning_base> "-" <end_base>
+            fasta_header = record.id + ":{}-{}".format(current_base, end_of_slice)
 
+            # Change the seq.id to the fasta header defined above. 
+            seq.id = seq.name = fasta_header
 
-		
+            # Set a blank description for the sequence.
+            # For some reason this throws off Biopython if there is nothing present in the description object. 
+            seq.description = ''
 
-		
+            # Add the sequence to the current batch 
+            batch.append(seq)
+
+            # This is where we start doing the math. 
+            # Add the lenth of the current sequence we are iterating through to the current base.
+            # When doing this, we also need to keep track of the batch_size... we want to make everything as equal as possible.
+            current_base += len(seq)
+            batch_size += len(seq)
+
+            # When we have "added" all of the bases from the current sequence we are iterating through, 
+            # then we need to go and grab the next sequence in the list. 
+            if current_base >= len(record):
+                record = next(record_it, None)
+                current_base = 0
+
+        # Once we have a batch with the correct size, yield the batch.
+        # OR... we have run out of sequences in the genome, so stop. 
+        yield batch
+        batch = []
+        batch_size = 0
+
+# Write out the batches as new fasta files. 
+for i, batch in enumerate(create_batch(records, chunk_size)):
+
+	#Name the filed and keep track of the numbering. 
+    filename = "chunk{}.fasta".format(i)
+
+    # Write all the batch'e's sequences and their appropriate headers to the output fasta file. 
+    SeqIO.write(batch, filename, "fasta")
