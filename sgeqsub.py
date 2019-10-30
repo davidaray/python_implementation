@@ -11,7 +11,7 @@ def generate_rmsubs(BATCH_COUNT, QUEUE, PREFIX, LIBRARY, SPECIES, XSMALL, NOLOW,
 			KUE = 'omni'
 		else:
 			sys.exit('Please choose hrothgar or quanah as the queue to use.')
-		with open("RMPart/" + BATCH + "/" + QSUB1FILENAME, 'w') as THISFILE:
+		with open("RMPart/" + BATCH + "/" + QSUBFILENAME, 'w') as THISFILE:
 			THISFILE.write('#!/bin/sh' + '\n')
 			THISFILE.write('#$ -V' + '\n')
 			THISFILE.write('#$ -cwd' + '\n')
